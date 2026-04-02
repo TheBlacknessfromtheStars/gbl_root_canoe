@@ -104,6 +104,27 @@ patch_efisp() {
   return 0
 }
 
+# detect ABL GBL vulnerability without flashing efisp
+# 0 vulnerable (should skip BL flash), 1 detect failed, 2 not vulnerable
+detect_gbl_vulnerability() {
+  rm "$RUNTIME_DIR/patched.efi" 2>/dev/null || true
+  rm "$RUNTIME_DIR/patch.log" 2>/dev/null || true
+  rm "$RUNTIME_DIR/LinuxLoader.efi" 2>/dev/null || true
+  $MODDIR/bin/extractfv -o "$RUNTIME_DIR" -v "$1" >> "$LOG_FILE" 2>&1
+  $MODDIR/bin/patch_abl "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" >> "$RUNTIME_DIR/patch.log" 2>&1
+  cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+  if [ ! -f "$RUNTIME_DIR/patched.efi" ]; then
+    write_log '漏洞检测失败：补丁文件未生成'
+    return 1
+  fi
+  if ! grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
+    write_log '检测到新的ABL版本，存在GBL漏洞，跳过后续BL刷写以保留BL版本'
+    return 0
+  fi
+  write_log '未检测到GBL漏洞，继续后续BL刷写'
+  return 2
+}
+
 cleanup_lock() { rm -rf "$LOCK_DIR"; rm -f "$PID_FILE";  }
 
 print_status() {
@@ -162,10 +183,10 @@ run_flash() {
   write_state 'running' "正在将镜像刷写到槽位 $target_slot"
   write_log "当前槽位: $current_slot  目标槽位: $target_slot"
   efisp_failed='0'
+  abl_part=$(partition_path abl "$target_slot")
 
   if [ "$update_efisp" = 'update-efisp' ] || [ "$update_efisp" = '1' ] || [ "$update_efisp" = 'true' ]; then
     #patch abl and flash efisp first, since it's the only one that can brick the device if something goes wrong
-    abl_part=$(partition_path abl "$target_slot")
     #0 success, 1 failed, 2 new ABL version with GBL vulnerability detected
     patch_efisp "$abl_part"
     ret=$?
@@ -184,6 +205,16 @@ run_flash() {
     esac
   else
     write_log '未勾选 efisp 更新，跳过 efisp 分区操作'
+      detect_gbl_vulnerability "$abl_part"
+      ret=$?
+      case $ret in
+        0) write_state 'success' '检测到GBL漏洞，已跳过BL刷写'
+           write_log '未更新efisp且检测到GBL漏洞，已跳过BL刷写'
+           exit 0 ;;
+        1) write_log '漏洞检测失败，继续执行BL刷写流程' ;;
+        2) ;;
+        *) write_log '警告：未知检测结果，继续执行BL刷写流程' ;;
+      esac
   fi
 
   for name in $IMAGE_NAMES; do
