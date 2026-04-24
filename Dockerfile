@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     zip vim xxd uuid-dev \
     nasm acpica-tools libssl-dev bc bison flex \
-    device-tree-compiler \
+    device-tree-compiler liblzma-dev\
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget https://apt.llvm.org/llvm.sh && \
